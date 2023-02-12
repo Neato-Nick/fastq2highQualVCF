@@ -129,10 +129,12 @@ echo $CMD
 eval $CMD
 
 # Remove alt alleles that don't meet AAScore, trim unused alts, and remove variants with no ALT
+# Rarely, this duplicated some variant IDs. Of those, take only the first record.
 omit_lowAAScore_out="${filter_aa_out}.omit_lowAAS"
 CMD="$HOME/dfs_opt/scripts/OmitLowAAScoreAlleles.py ${filter_aa_out}.vcf.gz - | \
 	bcftools view --threads $NSLOTS --trim-alt-alleles -Ou | \
-	bcftools view --threads $NSLOTS -m2 -o ${omit_lowAAScore_out}.vcf"
+	bcftools view --threads $NSLOTS -m2 -Ou |
+	bcftools norm -d exact -o ${omit_lowAAScore_out}.vcf"
 echo $CMD
 eval $CMD
 date
