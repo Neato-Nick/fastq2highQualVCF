@@ -1,25 +1,24 @@
 #!/bin/bash
 
 #$ -V
-#$ -N upad_vcftools_multiallelic_lowAA
+#$ -N filter_phase_unimpute
 #$ -e filter_err
 #$ -o filter_out
 ###$ -q *@!(nem*|samwise*|amp*|debary*|galls*|anduin*|symbiosis*)
-#$ -q samwise
+###$ -q nem
+#$ -q nem
 #$ -l mem_free=20G
 #$ -S /bin/bash
 #$ -cwd
 #$ -t 1-24:1
-#$ -tc 15
-#$ -pe thread 8
-
-# Filter each scaffold and phase
+#$ -tc 10
+#$ -pe thread 1
 
 i=$(expr $SGE_TASK_ID - 1)
 
 echo -n "Running on: "
 hostname
-echo "SGE job id: ${JOB_ID}:$SGE_TASK_ID"
+echo "SGE job id: $JOB_ID"
 date
 echo
 
@@ -60,11 +59,8 @@ avg_depths_f="${REFDIR}/stats/${avg_depths}.txt"
 min_dp_i=15
 # Include List:
 CMD="awk -v min_dp=$min_dp_i '\$2 >= min_dp' $avg_depths_f | cut -f 1 > ${avg_depths}.minDP${min_dp_i}.include.list"
-CMD="awk -v min_dp=$min_dp_i '\$2 <= min_dp' $avg_depths_f | cut -f 1 > ${avg_depths}.minDP${min_dp_i}.exclude.list"
-echo $CMD
-eval $CMD
 # Exclude list:
-CMD="awk -v min_dp=$min_dp_i '\$2 <= min_dp' $avg_depths_f | cut -f 1 > ${avg_depths}.minDP${min_dp_i}.exclude.list"
+#CMD="awk -v min_dp=$min_dp_i '\$2 <= min_dp' $avg_depths_f | cut -f 1 > ${avg_depths}.minDP${min_dp_i}.exclude.list"
 echo $CMD
 eval $CMD
 
@@ -89,8 +85,8 @@ CMD="python3 ~/dfs_opt/scripts/ReplaceGenoWithMissing_nc.py -v $initial_filt_vcf
 	-s $avg_depths_f -q $mapQ -n $gt_dp -o $vcf_upad_out -m 1 -a 2"
 echo $CMD
 eval $CMD
-date
-echo
+#date
+#echo
 
 # Censor based on hard cut-off of minimum cov, and remove samples averaging below X coverage
 # target is to remove 7881-E12 but there may be others we want to get rid of
@@ -129,11 +125,10 @@ echo $CMD
 eval $CMD
 
 # Remove alt alleles that don't meet AAScore, trim unused alts, and remove variants with no ALT
-# Rarely, this duplicated some variant IDs. Of those, take only the first record.
 omit_lowAAScore_out="${filter_aa_out}.omit_lowAAS"
 CMD="$HOME/dfs_opt/scripts/OmitLowAAScoreAlleles.py ${filter_aa_out}.vcf.gz - | \
 	bcftools view --threads $NSLOTS --trim-alt-alleles -Ou | \
-	bcftools view --threads $NSLOTS -m2 -Ou |
+	bcftools view --threads $NSLOTS -m2 -Ou | \
 	bcftools norm -d exact -o ${omit_lowAAScore_out}.vcf"
 echo $CMD
 eval $CMD
@@ -157,13 +152,26 @@ eval $CMD
 
 echo "Phasing VCF"
 beagle="/nfs5/BPP/Grunwald_Lab/home/carleson/opt/bin/beagle.jar"
-out_pre="phased/${VCF_name}.phased"
+out_pre="phased/${VCF_name}.impute.phased"
 echo
-CMD="java -Xmx100g -jar $beagle gt=$VCF out=$out_pre nthreads=$NSLOTS impute=FALSE"
+# avoiding imputation didn't just leave missing genotypes alone, it removed calls
+#CMD="java -Xmx100g -jar $beagle gt=$VCF out=$out_pre nthreads=$NSLOTS impute=FALSE"
+CMD="java -Xmx100g -jar $beagle gt=$VCF out=$out_pre nthreads=$NSLOTS"
 date
 echo $CMD
 eval $CMD
 
+echo "Phasing exit $?"
 
-echo "exit $?"
+echo "Un-imputing genotypes by converting to missing data"
+filter_strat=$(echo $VCF_name | sed "s/$scaffold//")
+CMD="Rscript ~/dfs_opt/scripts/CensorImputedGTs.R $scaffold $filter_strat"
+date
+echo $CMD
+eval $CMD
+# Output is regular gzipped, needs to be block-gzipped
+gunzip phased/${VCF_name}.impute.phased.re-NA.vcf.gz
+bgzip -f phased/${VCF_name}.impute.phased.re-NA.vcf
+tabix -f phased/${VCF_name}.impute.phased.re-NA.vcf.gz
+
 date
