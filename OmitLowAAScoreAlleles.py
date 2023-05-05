@@ -11,8 +11,9 @@ from pysam import VariantFile
 # Assumes you've already removed all variants where there is one alt allele and it failed the threshold
 # this saves up to hours of time by iterating through all samples only when absolutely necessary
 # INFO wil lhave lots of multiple values now e.g. 'AC=' for that allele,
-# pipe output using "-" as second arg to this script into bcftools to remove the freshly unused alt alleles and remove any sites that are all Ref:
-# <this_script.py> $in_vcf stdout | bcftools view --trim-alt-alleles -Ou | bcftools view -m2 
+# pipe output using as second arg to this script into bcftools to remove the freshly unused alt alleles and remove any sites with no ALT alleles
+# Usage: 
+# <this_script.py> $in_vcf stdout | bcftools view --trim-alt-alleles -Ou | bcftools view -m2
 
 if len(sys.argv) < 2 or sys.argv[1] == "-h" or sys.argv[1] == "--help":
 	sys.exit("Usage: OmitLowAAScoreAlleles.py <in_vcf> <out_vcf> <min_AA> \nIf no <out_vcf>, or stdout or - specified, outputs to stdout. Default minimum AAScore = 0.5" )
@@ -36,7 +37,6 @@ bcf_out=VariantFile(bcf_out_f, 'w', header = bcfIn.header)
 #If at least two, check every score[i]
 #if score[i] < threshold
 #for every gt, convert every matching allele to "."
-
 for rec in bcfIn.fetch():
 	if len(rec.info["AAScore"]) > 1:
 		for i, aa in enumerate(rec.info["AAScore"]):
