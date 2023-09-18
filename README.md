@@ -18,6 +18,12 @@ after jobs from a previous step are completed.
 3. read_alignment_bam2gvcf.sh
 4. combine_gvcfs_by_chrom.sh
 
+Steps 2-4 can be queued up after submitting Step 1.
+1-2 (and Step 3 of GATK) are parallelized per sample, and can submit while waiting for earlier steps to finish e.g. `#$ -hold_jid_ad fastq2cram`
+Step 3 Graphtyper (4 of GATK) is parallelized differently and shouldn't be performed until all samples are done.
+Therefore, use e.g. `-hold_jid cram2bam` instead.
+For details and correct usage, see: https://stackoverflow.com/a/28884945
+
 ## VCF Filtering
 
 There are lots of ways to filter, based on the objective of the study
