@@ -42,3 +42,49 @@ There will be additional scripts here to go from the phased VCF to these haploty
      i. ReplaceGenoWithMissing_nc.py
      ii. OmitLowAAScoreAlleles.py
 2. concat_vcfs.sh 
+
+## LOH / ROH
+
+From fastq to LOH calls, my workflow is:
+
+1. read_alignment_fastq2cram.sh
+2. read_alignment_cram2bam.sh
+3. read_alignment_bam2vcf_graphtyper.sh
+4. get_mean_dps_bams.sh
+5. Filter VCF lightly
+6. roh_plink.sh
+
+### LOH inference tool
+
+There are model-based and rules-based tools.
+For a review, see Ceballos et al. 2018, *Nat. Rev. Genet.*
+roh_plink.sh wraps PLINK v1.9, a rules-based tool.
+I have also used bcftools roh, a model-based tool.
+It produced similar calls to PLINK.
+Clonal populations violate the assumptions made by the model-based bcftools roh.
+That being said, the results were very similar for P. ramorum so either would probably would be fine.
+
+There are a lot of parameters to PLINK roh. Important considerations are in Meyermans et al. 2020, *BMC Genomics*
+
+### Filtering VCFs for LOH/ROH
+
+False positive SNPs likely reduce LOHs inferred, while false negatives could both inflate and reduce the number inferred.
+I tend to err on the cautious side, and lightly filter the VCF.
+My filtering scripts focus on the in-population, then apply the filters to the VCF containing outgroups.
+This results in high-quality SNPs for inferences on populations of inference, just using outgroups as anchor points on SNPs informative within-species.
+
+n.b. These scripts are fairly project-specific.
+To re-use them takes me ~1 hour to refamiliarize myself with inputs, outputs, and software dependencies.
+The lightly filtered and phased SNPs could be used for other purposes, including haplotype reconstruction.
+Phasing information **is not used** for LOH inference, but I needed the filtered VCF to be phased for other tools.
+
+1. filter_bcf_upadhyay.sh
+2. filter_snps_missingness.sh
+3. Generate VCF lists
+	1. ls -1 \*/\*.bcft_Idp15_aa05_PASS.upad_MQ0_median_3x.vcft_Vdp4_PASS.bcft_RRmis_lowAA.omit_lowAAS.vcf.gz > concat_vcfs_filt-lowAAS.list
+	2. vim concat_vcfs_filt-lowAAS.list # manually natural sort chrom/scaffold order
+	3. ls -1 \*/\*.bcft_Idp15_aa05_PASS.upad_MQ0_median_3x.vcft_Vdp4_PASS.bcft_RRmis_lowAA.omit_lowAAS.prams_poly-bi-snps.mq20_vmiss0.25.vcf.gz  > poly-bi_prams.list
+	4. vim poly-bi_prams.list # manually natural sort chrom/scaffold order
+4. filter_snps_missingness_concat_scratchdir.sh
+
+

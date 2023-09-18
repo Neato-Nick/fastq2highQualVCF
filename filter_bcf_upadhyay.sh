@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #$ -V
-#$ -N filter_phase_unimpute
+#$ -N phase_unimpute
 #$ -e filter_err
 #$ -o filter_out
 ###$ -q *@!(nem*|samwise*|amp*|debary*|galls*|anduin*|symbiosis*)
@@ -53,7 +53,8 @@ big_vcf=$workdir/${big_vcf_name}.vcf.gz
 # Type of average used and Minimum mapping qual
 avg="median"
 mapQ=0
-avg_depths="mean-dp_globaldiv_n669.mosdepth_mapQ${mapQ}_${avg}"
+#avg_depths="mean-dp_globaldiv_n669.mosdepth_mapQ${mapQ}_${avg}"
+avg_depths="mean-dp_curryco_freshNA1_n144.mosdepth_mapQ${mapQ}_${avg}"
 avg_depths_f="${REFDIR}/stats/${avg_depths}.txt"
 # initial awk-ing of min_dp_i only neds to be performed once
 min_dp_i=15
@@ -72,10 +73,13 @@ CMD="bcftools view --threads 4 -Ou \
 	-f .,PASS --include '(INFO/AAScore[*] >= 0.5)' \
 	-o $initial_filt_vcf"
 TABIX="tabix $initial_filt_vcf"
-echo $CMD
-eval $CMD
-echo $TABIX
-eval $TABIX
+if [ ! -f $initial_filt_vcf ]
+then
+	echo $CMD
+	eval $CMD
+	echo $TABIX
+	eval $TABIX
+fi
 
 # Censor based on missing data quantile
 # x/3 or 3x
@@ -83,10 +87,13 @@ gt_dp=3
 vcf_upad_out="$workdir/""$(basename --suffix ".vcf.gz" ${initial_filt_vcf})"".upad_MQ${mapQ}_${avg}_${gt_dp}x.vcf.gz"
 CMD="python3 ~/dfs_opt/scripts/ReplaceGenoWithMissing_nc.py -v $initial_filt_vcf \
 	-s $avg_depths_f -q $mapQ -n $gt_dp -o $vcf_upad_out -m 1 -a 2"
-echo $CMD
-eval $CMD
-#date
-#echo
+if [ ! -f $vcf_upad_out ]
+then
+	echo $CMD
+	eval $CMD
+	date
+	echo
+fi
 
 # Censor based on hard cut-off of minimum cov, and remove samples averaging below X coverage
 # target is to remove 7881-E12 but there may be others we want to get rid of
@@ -96,14 +103,17 @@ min_dp_v=4
 remove_sms_out="$workdir/""$(basename --suffix ".vcf.gz" ${vcf_upad_out})"".vcft_Vdp${min_dp_v}_PASS"
 CMD="vcftools --gzvcf $vcf_upad_out --out $remove_sms_out --recode --recode-INFO-all \
 	--minDP $min_dp --minQ $min_Q --remove-filtered-all"
-echo $CMD
-eval $CMD
-CMD="bgzip -f ${remove_sms_out}.recode.vcf"
-echo $CMD
-eval $CMD
-CMD="tabix -f ${remove_sms_out}.recode.vcf.gz"
-echo $CMD
-eval $CMD
+if [ ! -f ${remove_sms_out}.recode.vcf.gz ]
+then	
+	echo $CMD
+	eval $CMD
+	CMD="bgzip -f ${remove_sms_out}.recode.vcf"
+	echo $CMD
+	eval $CMD
+	CMD="tabix -f ${remove_sms_out}.recode.vcf.gz"
+	echo $CMD
+	eval $CMD
+fi
 
 # Remove any variants where number of Homref+MissingGTs=number of samples,
 # possible for any samples we removed containing singletons
@@ -113,34 +123,41 @@ CMD="bcftools view --trim-alt-alleles --threads $NSLOTS  -Ou \
 	${remove_sms_out}.recode.vcf.gz | \
 	bcftools view --threads $NSLOTS --trim-alt-alleles -o ${filter_aa_out}.vcf
 	--include '(COUNT(GT=\"RR\")+(COUNT(GT=\"mis\"))) < N_SAMPLES & INFO/AAScore[*] >= 0.5'"
-echo $CMD
-eval $CMD
-date
-echo
-CMD="bgzip -f ${filter_aa_out}.vcf"
-echo $CMD
-eval $CMD
-CMD="tabix -f ${filter_aa_out}.vcf.gz"
-echo $CMD
-eval $CMD
+if [ ! -f ${filter_aa_out}.vcf.gz ]
+then
+	echo $CMD
+	eval $CMD
+	date
+	echo
+	CMD="bgzip -f ${filter_aa_out}.vcf"
+	echo $CMD
+	eval $CMD
+	CMD="tabix -f ${filter_aa_out}.vcf.gz"
+	echo $CMD
+	eval $CMD
+fi
 
-# Remove alt alleles that don't meet AAScore, trim unused alts, and remove variants with no ALT
+# Remove alt alleles that don't meet AAScore, trim unused alts, remove variants with no ALT,
+# and retain only the first record of each variant that appeared multiple times
 omit_lowAAScore_out="${filter_aa_out}.omit_lowAAS"
 CMD="$HOME/dfs_opt/scripts/OmitLowAAScoreAlleles.py ${filter_aa_out}.vcf.gz - | \
 	bcftools view --threads $NSLOTS --trim-alt-alleles -Ou | \
 	bcftools view --threads $NSLOTS -m2 -Ou | \
 	bcftools norm -d exact -o ${omit_lowAAScore_out}.vcf"
-echo $CMD
-eval $CMD
-date
-echo
+if [ ! -f ${omit_lowAAScore_out}.vcf.gz ]
+then
+	echo $CMD
+	eval $CMD
+	date
+	echo
 
-CMD="bgzip -f ${omit_lowAAScore_out}.vcf"
-echo $CMD
-eval $CMD
-CMD="tabix -f ${omit_lowAAScore_out}.vcf.gz"
-echo $CMD
-eval $CMD
+	CMD="bgzip -f ${omit_lowAAScore_out}.vcf"
+	echo $CMD
+	eval $CMD
+	CMD="tabix -f ${omit_lowAAScore_out}.vcf.gz"
+	echo $CMD
+	eval $CMD
+fi
 
 # What did we end up with?
 VCF="${omit_lowAAScore_out}.vcf.gz"
