@@ -244,7 +244,9 @@ apply_flips_and_join_cc <- function(vcf_gts, clade_df = NULL, flip_df = NULL, cc
     left_join(clade_df %||% tibble(Analysis_ID = character(), Clade = character()), by = "Analysis_ID")
   if (!is.null(flip_df) && nrow(flip_df) > 0) {
     if (verbose) message("Joining gt data to flip_df (found).")
-    vcf_rows <- left_join(vcf_rows, flip_df %>% select(Key, original_label, flipped_label), by = "Key")
+    # bring in original/flipped labels AND the AA_pos from the flip map so we can
+    # treat WT genotypes as effective flipped variants for hotspot assignment.
+    vcf_rows <- left_join(vcf_rows, flip_df %>% select(Key, original_label, flipped_label, AA_pos) %>% rename(flip_AA_pos = AA_pos), by = "Key")
   } else {
     if (verbose) message("No flip_df found; adding placeholder original_label/flipped_label columns.")
     vcf_rows <- mutate(vcf_rows, original_label = NA_character_, flipped_label = NA_character_)
@@ -261,6 +263,16 @@ apply_flips_and_join_cc <- function(vcf_gts, clade_df = NULL, flip_df = NULL, cc
   } else {
     vcf_rows <- vcf_rows %>% mutate(Variant_oref = Variant)
   }
+  # --- NEW: make flipped-aware AA_pos + Variant for downstream hotspot detection ---
+  # If the VCF shows WT at a position but a flipped_label exists for the Key,
+  # then treat this row as having the flipped amino-acid (and the AA_pos from the flip map)
+  # for the purposes of hotspot assignment. We keep Variant (reported) as Variant_oref
+  # so other logic (Variants, Variants_CC) continues to behave as before.
+  vcf_rows <- vcf_rows %>%
+    mutate(
+      Variant_for_hotspot = if_else(!is.na(flipped_label) & !is.na(gt_GT) & gt_GT == 0, flipped_label, Variant_oref),
+      AA_pos_for_hotspot = if_else(!is.na(flipped_label) & !is.na(gt_GT) & gt_GT == 0, flip_AA_pos, AA_pos)
+    )
   if (!is.null(cc_variants) && nrow(cc_variants) > 0) {
     if (verbose) message("Joining gt data to pre-computed clade variants.")
     vcf_rows <- vcf_rows %>% left_join(., cc_variants %>% select(Clade, Variant, Var_CC), by = c("Clade", "Variant_oref" = "Variant"))
@@ -273,7 +285,7 @@ apply_flips_and_join_cc <- function(vcf_gts, clade_df = NULL, flip_df = NULL, cc
     Variant = Variant_oref,
     Variant_CC = if_else(is_cc, "CC", Variant)
   ) %>%
-    select(Key, Analysis_ID, Clade, gt_GT, Variant, Variant_CC, is_cc, AA_pos) %>%
+    select(Key, Analysis_ID, Clade, gt_GT, Variant, Variant_CC, is_cc, AA_pos, original_label, flipped_label, Variant_for_hotspot, AA_pos_for_hotspot) %>%
     { suppressMessages(readr::type_convert(.)) }
   vcf_rows
 }
@@ -282,13 +294,38 @@ apply_flips_and_join_cc <- function(vcf_gts, clade_df = NULL, flip_df = NULL, cc
 assign_hotspots <- function(vcf_rows, hotspots = NULL, verbose = FALSE) {
   if (is.null(hotspots)) return(vcf_rows)
   if (verbose) message("Identifying mutational hot-spot regions.")
-  vcf_rows <- left_join(vcf_rows, hotspots, by = join_by(AA_pos >= Start_aa, AA_pos <= End_aa)) %>%
-    mutate(Hotspot = case_when(is.na(Segment) & is.na(AA_pos) & !is.na(gt_GT) ~ "WT",
-                               is.na(Segment) & !is.na(AA_pos) & !is.na(gt_GT) ~ "NonHS",
-                               is.na(Variant) ~ NA_character_,
-                               .default = Segment)) %>%
-    mutate(Hotspot_CC = case_when(Variant_CC == "CC" ~ NA_character_,
-                                  .default = Hotspot))
+  # join hotspots using the flipped-aware AA_pos_for_hotspot column (falls back to AA_pos)
+  vcf_rows <- left_join(
+    vcf_rows %>% mutate(.AA_pos_for_hs = coalesce(AA_pos_for_hotspot, AA_pos)),
+    hotspots %>% mutate(Start_aa = as.integer(Start_aa), End_aa = as.integer(End_aa)),
+    by = join_by(.AA_pos_for_hs >= Start_aa, .AA_pos_for_hs <= End_aa)
+  ) %>%
+    # decide whether this row is effectively non-WT for hotspot purposes using the flipped-aware Variant_for_hotspot
+    mutate(
+      has_effective_nonWT = case_when(
+        !is.na(Variant_for_hotspot) & Variant_for_hotspot != "WT" ~ TRUE,
+        TRUE ~ FALSE
+      )
+    ) %>%
+    mutate(
+      # use the flipped-aware AA/Variant when deciding hotspot membership:
+      # - if no segment and no AA_pos info -> WT (called but outside annotated AA positions)
+      # - if no segment but AA_pos present and effective nonWT -> NonHS
+      # - if Variant is NA -> NA (missing genotype/annotation)
+      # - otherwise the hotspot Segment (HS label)
+      Hotspot = case_when(
+        is.na(Segment) & is.na(.AA_pos_for_hs) & !is.na(gt_GT) ~ "WT",
+        is.na(Segment) & !is.na(.AA_pos_for_hs) & !is.na(gt_GT) & has_effective_nonWT ~ "NonHS",
+        is.na(Variant) ~ NA_character_,
+        .default = Segment
+      )
+    ) %>%
+    # Hotspot_CC should reflect hotspot for non-CC rows but preserve NA for rows that are CC
+    mutate(Hotspot_CC = case_when(
+      Variant_CC == "CC" ~ NA_character_,
+      TRUE ~ Hotspot
+    )) %>%
+    select(-.AA_pos_for_hs, -has_effective_nonWT)
   vcf_rows
 }
 
@@ -342,17 +379,27 @@ summarize_per_isolate <- function(vcf_rows, vcf_samples, clade_df = NULL, cc_var
       "WT"
     }
     # Hotspots_CC
-    hs_cc_rows <- rows_iso %>% filter(!is.na(gt_GT) & !is.na(Variant) & Variant != "WT" & !is_cc)
-    hs_cc_vals <- unique(hs_cc_rows$Hotspot[!is.na(hs_cc_rows$Hotspot)])
+    # - Use Variant_CC (coalesced) to identify non-CC contributors so we avoid mismatches
+    #   between the per-row hotspot assignment and the is_cc flag arising from joins.
+    # - Treat rows with NA Hotspot but a present non-CC non-WT call as "NonHS".
+    hs_cc_rows <- rows_iso %>%
+      filter(!is.na(gt_GT) & !is.na(Variant) & Variant != "WT" &
+               coalesce(Variant_CC, Variant) != "CC")
+    hs_cc_vals <- unique(coalesce(hs_cc_rows$Hotspot, "NonHS")[!is.na(coalesce(hs_cc_rows$Hotspot, "NonHS"))])
+    has_cc <- any(coalesce(rows_iso$is_cc, FALSE), na.rm = TRUE)
     Hotspots_CC_val <- if (n_called == 0) {
       NA_character_
     } else if (length(hs_cc_vals) > 0) {
-      paste(hs_cc_vals, collapse = ",")
+      vals <- unique(hs_cc_vals)
+      if (has_cc) vals <- c(vals, "CC")
+      paste(vals, collapse = ",")
+    } else if (has_cc) {
+      "CC"
     } else {
       if (n_called > 0 && all((rows_iso$Variant[!is.na(rows_iso$gt_GT)]) == "WT", na.rm = TRUE)) {
         "WT"
       } else if (any(!is.na(rows_iso$Variant) & rows_iso$Variant != "WT" & !is.na(rows_iso$gt_GT))) {
-        "CC"
+        "NonHS"
       } else {
         "WT"
       }
@@ -374,7 +421,9 @@ summarize_per_isolate <- function(vcf_rows, vcf_samples, clade_df = NULL, cc_var
       Hotspots_CC = Hotspots_CC_val,
       CC_variants = CC_variants_val,
       n_called = n_called
-    )
+    ) %>%
+      mutate(across(contains("Hotspot"), ~str_remove(., "WT,"))) %>%
+      mutate(across(contains("Hotspot"), ~str_remove(., ",WT")))
   })
   summaries
 }
