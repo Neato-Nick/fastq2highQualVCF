@@ -249,7 +249,7 @@ apply_flips_and_join_cc <- function(vcf_gts, clade_df = NULL, flip_df = NULL, cc
     vcf_rows <- left_join(vcf_rows, flip_df %>% select(Key, original_label, flipped_label, AA_pos) %>% rename(flip_AA_pos = AA_pos), by = "Key")
   } else {
     if (verbose) message("No flip_df found; adding placeholder original_label/flipped_label columns.")
-    vcf_rows <- mutate(vcf_rows, original_label = NA_character_, flipped_label = NA_character_)
+    vcf_rows <- mutate(vcf_rows, original_label = NA_character_, flipped_label = NA_character_, flip_AA_pos = NA_integer_)
   }
   if (!is.null(flip_df) && nrow(flip_df) > 0) {
     vcf_rows <- vcf_rows %>%
@@ -271,7 +271,7 @@ apply_flips_and_join_cc <- function(vcf_gts, clade_df = NULL, flip_df = NULL, cc
   vcf_rows <- vcf_rows %>%
     mutate(
       Variant_for_hotspot = if_else(!is.na(flipped_label) & !is.na(gt_GT) & gt_GT == 0, flipped_label, Variant_oref),
-      AA_pos_for_hotspot = if_else(!is.na(flipped_label) & !is.na(gt_GT) & gt_GT == 0, flip_AA_pos, AA_pos)
+      AA_pos_for_hotspot = if_else(!is.na(flipped_label) & !is.na(gt_GT) & gt_GT == 0, as.integer(flip_AA_pos), as.integer(AA_pos))
     )
   if (!is.null(cc_variants) && nrow(cc_variants) > 0) {
     if (verbose) message("Joining gt data to pre-computed clade variants.")
@@ -285,7 +285,7 @@ apply_flips_and_join_cc <- function(vcf_gts, clade_df = NULL, flip_df = NULL, cc
     Variant = Variant_oref,
     Variant_CC = if_else(is_cc, "CC", Variant)
   ) %>%
-    select(Key, Analysis_ID, Clade, gt_GT, Variant, Variant_CC, is_cc, AA_pos, original_label, flipped_label, Variant_for_hotspot, AA_pos_for_hotspot) %>%
+    select(Key, Analysis_ID, Clade, gt_GT, Variant, Variant_CC, is_cc, AA_pos, original_label, flipped_label, flip_AA_pos, Variant_for_hotspot, AA_pos_for_hotspot) %>%
     { suppressMessages(readr::type_convert(.)) }
   vcf_rows
 }
