@@ -87,9 +87,17 @@ read_and_tidy_vcf <- function(vcf_file, gene_id, verbose = FALSE) {
   vcf_info_locus_raw <- suppressMessages(tidy_snpeff(vcf_raw))
   vcf_info_locus <- vcf_info_locus_raw %>%
     filter(Annotation_Impact != "MODIFIER") %>%
-    filter(Gene_ID == gene_id) %>%
+    filter(Gene_ID %in% gene_id) %>%
     separate_wider_delim(`AA.pos / AA.length`, delim = "/", names = c("AA_pos", "AA_length"))
-  list(vcf_raw = vcf_raw, vcf_info_locus = vcf_info_locus, vcf_samples = vcf_samples)
+  vcf_gene <- vcf_raw[unique(vcf_info_locus$Key),]
+  if (verbose) message("VCF was subset to only variants in target gene, n = ",  nrow(vcf_gene@fix))
+  # Recompute tidy snpEff annotations for the subset so Key indices align with vcf_gene
+  vcf_info_locus <- suppressMessages(tidy_snpeff(vcf_gene)) %>%
+    filter(Annotation_Impact != "MODIFIER") %>%
+    filter(Gene_ID %in% gene_id) %>%
+    separate_wider_delim(`AA.pos / AA.length`, delim = "/", names = c("AA_pos", "AA_length"))
+  #list(vcf_raw = vcf_raw, vcf_info_locus = vcf_info_locus, vcf_samples = vcf_samples)
+  list(vcf_raw = vcf_gene, vcf_info_locus = vcf_info_locus, vcf_samples = vcf_samples)
 }
 
 # Parse required_positions and flip_variants args into Keys for the gene based on vcf_info_locus
